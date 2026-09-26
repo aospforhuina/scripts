@@ -1,80 +1,394 @@
-#NoEnv                       ; 피해야 할 환경 변수 검사를 생략하여 실행 속도 향상
-#MaxHotkeysPerInterval 99000000 ; 단시간 내 과도한 키 입력 시 경고창이 뜨는 것을 방지
-#HotkeyInterval 99000000       ; 위 설정과 세트 (동시 입력 씹힘 방지)
-KeyHistory 0                 ; 키 입력 이력 기록을 중지하여 CPU 오버헤드 제거
-ListLines Off                ; 실행된 라인 로그 기록을 중지하여 연산 속도 극한으로 상승
-Process, Priority, , H       ; 이 스크립트의 CPU 우선순위를 '높음(High)'으로 설정
-SetBatchLines, -1            ; 스크립트 줄 간의 의도적인 대기 시간(10ms)을 없애고 즉시 실행
-SetKeyDelay, -1, -1          ; 키 입력 사이의 지연 시간 제거 (가장 중요)
-SetMouseDelay, -1            ; 마우스 입력 지연 시간 제거
-SetDefaultMouseSpeed, 0      ; 마우스 이동 속도를 즉시 이동으로 설정
-SetWinDelay, -1              ; 창 제어 관련 지연 시간 제거
-SetControlDelay, -1          ; 컨트롤 제어 관련 지연 시간 제거
-SendMode Input
-#UseHook On            ; 윈도우 훅을 강제로 사용하여 키 입력 감지 속도 일관성 유지
-Critical               ; 스크립트 연산 중 다른 백그라운드 스레드가 끼어들지 못하게 차단
-Thread, Interrupt, 0   ; 핫키가 실행되는 순간 즉시 최우선 순위로 처리 (인터럽트 지연 0) 
-; 변수 초기화 (0: 떼짐, 1: 눌러짐)
-global a_pressed := 0
-global d_pressed := 0
-global last_key := ""
+﻿
+#Requires AutoHotkey v2.0
 
-return
+; ============================================================
+; A/D SOCD - Last Input Priority
+; Performance Optimized
+;
+; AutoHotkey v2 only
+;
+; Physical state:
+;   physicalA
+;   physicalD
+;
+; Output state:
+;   activeDirection
+;
+; Last physical Down:
+;   lastDownDirection
+;
+; A/D 이외의 키에는 아무런 SOCD 처리를 하지 않는다.
+; ============================================================
 
-;--------------------------------------------------------
-; A 키 입력 처리
-;--------------------------------------------------------
-~$*a::
-    if (a_pressed)
-        return ; 키가 계속 눌려있는 상태(반복 입력)면 무시
-    
-    a_pressed := 1
-    last_key := "a"
-    
-    if (d_pressed) {
-        ; D가 눌려있는 상태에서 A를 누르면, D를 떼고 A를 입력
-        SendInput {Blind}{d up}{a down}
-    } else {
-        SendInput {Blind}{a down}
+
+; ============================================================
+; 성능 / 입력 처리 설정
+; ============================================================
+
+; 핫키 스레드가 중복으로 동시에 실행되는 것을 방지한다.
+#MaxThreads 1
+#MaxThreadsPerHotkey 1
+#MaxThreadsBuffer false
+
+; SendEvent의 기본 KeyDelay / PressDuration 제거.
+; 음수 값은 지연을 사용하지 않음을 의미한다.
+SetKeyDelay(-1, -1)
+
+; 키보드/마우스 Hook 사용.
+; $ 핫키와 함께 물리 입력을 안정적으로 구분하는 데 사용된다.
+
+
+
+; ============================================================
+; 상태 변수
+; ============================================================
+
+global physicalA := false
+global physicalD := false
+
+; 현재 실제 출력 중인 방향.
+; "A", "D", ""
+global activeDirection := ""
+
+; 마지막으로 발생한 유효한 Physical Down.
+; "A", "D", ""
+global lastDownDirection := ""
+
+
+; ============================================================
+; 초기 상태
+; ============================================================
+
+InitializeState()
+
+
+; ============================================================
+; A Down
+;
+; $:
+; SendEvent()로 생성된 A Down이 다시 이 핫키를 호출하지
+; 않도록 한다.
+; ============================================================
+
+$a::
+{
+    HandleKeyDown("A")
+}
+
+
+; ============================================================
+; A Up
+; ============================================================
+
+$a Up::
+{
+    HandleKeyUp("A")
+}
+
+
+; ============================================================
+; D Down
+; ============================================================
+
+$d::
+{
+    HandleKeyDown("D")
+}
+
+
+; ============================================================
+; D Up
+; ============================================================
+
+$d Up::
+{
+    HandleKeyUp("D")
+}
+
+
+; ============================================================
+; 초기 상태 확인
+;
+; 스크립트가 시작될 때 이미 눌려 있는 A/D를 확인한다.
+;
+; 시작 이전의 실제 Down 순서는 알 수 없으므로 둘 다 눌려
+; 있는 특수한 경우 A를 초기 우선순위로 사용한다.
+; ============================================================
+
+InitializeState()
+{
+    global physicalA
+    global physicalD
+    global activeDirection
+    global lastDownDirection
+
+    physicalA := GetKeyState("a", "P")
+    physicalD := GetKeyState("d", "P")
+
+    if (physicalA)
+    {
+        lastDownDirection := "A"
     }
-return
-
-~$*a up::
-    a_pressed := 0
-    
-    if (d_pressed) {
-        ; A를 뗐을 때 여전히 D가 눌려있다면 D를 다시 입력
-        SendInput {Blind}{a up}{d down}
-    } else {
-        SendInput {Blind}{a up}
+    else if (physicalD)
+    {
+        lastDownDirection := "D"
     }
-return
-
-;--------------------------------------------------------
-; D 키 입력 처리
-;--------------------------------------------------------
-~$*d::
-    if (d_pressed)
-        return ; 키가 계속 눌려있는 상태(반복 입력)면 무시
-    
-    d_pressed := 1
-    last_key := "d"
-    
-    if (a_pressed) {
-        ; A가 눌려있는 상태에서 D를 누르면, A를 떼고 D를 입력
-        SendInput {Blind}{a up}{d down}
-    } else {
-        SendInput {Blind}{d down}
+    else
+    {
+        lastDownDirection := ""
     }
-return
 
-~$*d up::
-    d_pressed := 0
-    
-    if (a_pressed) {
-        ; D를 뗐을 때 여전히 A가 눌려있다면 A를 다시 입력
-        SendInput {Blind}{d up}{a down}
-    } else {
-        SendInput {Blind}{d up}
+    if (physicalA && physicalD)
+    {
+        ; 시작 이전의 Down 순서를 알 수 없으므로
+        ; 결정적인 초기값으로 A를 사용한다.
+        activeDirection := "A"
+        SendKeyDown("A")
     }
-return
+    else if (physicalA)
+    {
+        activeDirection := "A"
+        SendKeyDown("A")
+    }
+    else if (physicalD)
+    {
+        activeDirection := "D"
+        SendKeyDown("D")
+    }
+}
+
+
+; ============================================================
+; Physical Key Down
+; ============================================================
+
+HandleKeyDown(key)
+{
+    global physicalA
+    global physicalD
+    global activeDirection
+    global lastDownDirection
+
+    ; 입력 처리 중 다른 스레드가 상태를 변경하지 않도록 한다.
+    Critical("On")
+
+    ; --------------------------------------------------------
+    ; 이미 눌린 키의 중복 Down은 무시한다.
+    ; --------------------------------------------------------
+
+    if (key = "A")
+    {
+        if (physicalA)
+        {
+            return
+        }
+
+        physicalA := true
+    }
+    else
+    {
+        ; 이 함수는 A/D만 호출하므로 D로 처리한다.
+        if (physicalD)
+        {
+            return
+        }
+
+        physicalD := true
+    }
+
+    ; --------------------------------------------------------
+    ; 새로운 Down이므로 LIP의 최신 입력으로 기록.
+    ; --------------------------------------------------------
+
+    lastDownDirection := key
+
+    ; 이미 해당 방향이 활성화되어 있다면 아무 것도 하지 않는다.
+    if (activeDirection = key)
+    {
+        return
+    }
+
+    ; --------------------------------------------------------
+    ; 방향 전환
+    ;
+    ; 반드시:
+    ;
+    ; 기존 방향 Up
+    ; 새 방향 Down
+    ;
+    ; 순서를 유지한다.
+    ; --------------------------------------------------------
+
+    if (activeDirection = "A")
+    {
+        SendKeyUp("A")
+    }
+    else if (activeDirection = "D")
+    {
+        SendKeyUp("D")
+    }
+
+    SendKeyDown(key)
+    activeDirection := key
+}
+
+
+; ============================================================
+; Physical Key Up
+; ============================================================
+
+HandleKeyUp(key)
+{
+    global physicalA
+    global physicalD
+    global activeDirection
+
+    Critical("On")
+
+    ; --------------------------------------------------------
+    ; Physical 상태 변경
+    ; --------------------------------------------------------
+
+    if (key = "A")
+    {
+        ; 이미 Up이면 중복 Up이므로 무시.
+        if (!physicalA)
+        {
+            return
+        }
+
+        physicalA := false
+    }
+    else
+    {
+        if (!physicalD)
+        {
+            return
+        }
+
+        physicalD := false
+    }
+
+    ; --------------------------------------------------------
+    ; 현재 활성 방향이 아니라면 출력에 아무런 영향을 주지
+    ; 않는다.
+    ; --------------------------------------------------------
+
+    if (activeDirection != key)
+    {
+        return
+    }
+
+    ; --------------------------------------------------------
+    ; 현재 활성 방향 Release
+    ; --------------------------------------------------------
+
+    SendKeyUp(key)
+    activeDirection := ""
+
+    ; --------------------------------------------------------
+    ; 반대 키가 여전히 Physical Down이면 즉시 복귀.
+    ; --------------------------------------------------------
+
+    if (key = "A")
+    {
+        if (physicalD)
+        {
+            SendKeyDown("D")
+            activeDirection := "D"
+        }
+    }
+    else
+    {
+        if (physicalA)
+        {
+            SendKeyDown("A")
+            activeDirection := "A"
+        }
+    }
+}
+
+
+; ============================================================
+; 실제 A/D Down 출력
+; ============================================================
+
+SendKeyDown(key)
+{
+    if (key = "A")
+    {
+        SendEvent("{a down}")
+    }
+    else
+    {
+        SendEvent("{d down}")
+    }
+}
+
+
+; ============================================================
+; 실제 A/D Up 출력
+; ============================================================
+
+SendKeyUp(key)
+{
+    if (key = "A")
+    {
+        SendEvent("{a up}")
+    }
+    else
+    {
+        SendEvent("{d up}")
+    }
+}
+
+
+; ============================================================
+; 안전한 전체 Release
+;
+; Reload / Exit 때 호출된다.
+; ============================================================
+
+ReleaseAllOutputs()
+{
+    global physicalA
+    global physicalD
+    global activeDirection
+    global lastDownDirection
+
+    Critical("On")
+
+    ; 현재 활성 출력부터 해제한다.
+    if (activeDirection = "A")
+    {
+        SendKeyUp("A")
+    }
+    else if (activeDirection = "D")
+    {
+        SendKeyUp("D")
+    }
+
+    ; 내부 상태가 예상과 달라졌더라도 stuck 방지를 위해
+    ; A/D 양쪽에 Up을 한 번 더 보낸다.
+    SendKeyUp("A")
+    SendKeyUp("D")
+
+    physicalA := false
+    physicalD := false
+    activeDirection := ""
+    lastDownDirection := ""
+}
+
+
+; ============================================================
+; Script 종료 / Reload
+; ============================================================
+
+OnExit(HandleExit)
+
+
+HandleExit(ExitReason, ExitCode)
+{
+    ReleaseAllOutputs()
+}
+
