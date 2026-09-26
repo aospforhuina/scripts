@@ -1,11 +1,12 @@
-﻿
 #Requires AutoHotkey v2.0
+#SingleInstance Force
+#UseHook
+
 
 ; ============================================================
 ; A/D SOCD - Last Input Priority
-; Performance Optimized
 ;
-; AutoHotkey v2 only
+; AutoHotkey v2
 ;
 ; Physical state:
 ;   physicalA
@@ -14,381 +15,468 @@
 ; Output state:
 ;   activeDirection
 ;
-; Last physical Down:
-;   lastDownDirection
+; Direction values:
+;   0 = None
+;   1 = A
+;   2 = D
 ;
-; A/D 이외의 키에는 아무런 SOCD 처리를 하지 않는다.
+; LIP:
+;   마지막으로 발생한 Down 이벤트의 키가 우선권을 가진다.
+;
 ; ============================================================
 
 
 ; ============================================================
-; 성능 / 입력 처리 설정
+; 성능 최적화
 ; ============================================================
 
-; 핫키 스레드가 중복으로 동시에 실행되는 것을 방지한다.
-#MaxThreads 1
-#MaxThreadsPerHotkey 1
-#MaxThreadsBuffer false
+; Send는 Input 모드 사용
+; AHK v2의 기본값이지만 명시적으로 설정한다.
+SendMode "Input"
 
-; SendEvent의 기본 KeyDelay / PressDuration 제거.
-; 음수 값은 지연을 사용하지 않음을 의미한다.
-SetKeyDelay(-1, -1)
+; 키보드 Hook 강제 사용
+#UseHook
 
-; 키보드/마우스 Hook 사용.
-; $ 핫키와 함께 물리 입력을 안정적으로 구분하는 데 사용된다.
+; 키 입력 이력 비활성화
+KeyHistory 0
 
+; 실행 라인 기록 비활성화
+ListLines false
+
+; 짧은 시간 동안 발생하는 많은 Hotkey 입력에 대한
+; 경고 기준을 사실상 제거한다.
+A_HotkeyInterval := 99000000
+A_MaxHotkeysPerInterval := 99000000
+
+; 프로세스 우선순위를 High로 설정.
+; 게임 등 CPU 부하가 높은 상황에서 hotkey/send 지연을
+; 줄이는 데 도움이 될 수 있다.
+ProcessSetPriority "High"
+
+; 새로 실행되는 Thread가 즉시 interruptible하도록 한다.
+;
+; 게임 입력처럼 hotkey 응답성이 중요한 경우 유리하다.
+Thread "Interrupt", 0
 
 
 ; ============================================================
 ; 상태 변수
 ; ============================================================
 
+; Physical keyboard state
 global physicalA := false
 global physicalD := false
 
-; 현재 실제 출력 중인 방향.
-; "A", "D", ""
-global activeDirection := ""
 
-; 마지막으로 발생한 유효한 Physical Down.
-; "A", "D", ""
-global lastDownDirection := ""
-
-
-; ============================================================
-; 초기 상태
-; ============================================================
-
-InitializeState()
-
-
-; ============================================================
-; A Down
+; ------------------------------------------------------------
+; 현재 실제로 게임에 출력하고 있는 방향
 ;
-; $:
-; SendEvent()로 생성된 A Down이 다시 이 핫키를 호출하지
-; 않도록 한다.
-; ============================================================
+; 0 = 없음
+; 1 = A
+; 2 = D
+; ------------------------------------------------------------
 
-$a::
-{
-    HandleKeyDown("A")
-}
+global activeDirection := 0
 
 
-; ============================================================
-; A Up
-; ============================================================
-
-$a Up::
-{
-    HandleKeyUp("A")
-}
-
-
-; ============================================================
-; D Down
-; ============================================================
-
-$d::
-{
-    HandleKeyDown("D")
-}
-
-
-; ============================================================
-; D Up
-; ============================================================
-
-$d Up::
-{
-    HandleKeyUp("D")
-}
-
-
-; ============================================================
-; 초기 상태 확인
+; ------------------------------------------------------------
+; 마지막 Down 이벤트 순서
 ;
-; 스크립트가 시작될 때 이미 눌려 있는 A/D를 확인한다.
-;
-; 시작 이전의 실제 Down 순서는 알 수 없으므로 둘 다 눌려
-; 있는 특수한 경우 A를 초기 우선순위로 사용한다.
+; 요구사항에 따라 마지막 입력 순서를 명시적으로 추적한다.
+; ------------------------------------------------------------
+
+global lastDownSequence := 0
+
+global lastDownA := 0
+global lastDownD := 0
+
+
+; ============================================================
+; A DOWN
 ; ============================================================
 
-InitializeState()
+$*a::
+{
+    HandleKeyDown(1)
+}
+
+
+; ============================================================
+; A UP
+; ============================================================
+
+$*a up::
+{
+    HandleKeyUp(1)
+}
+
+
+; ============================================================
+; D DOWN
+; ============================================================
+
+$*d::
+{
+    HandleKeyDown(2)
+}
+
+
+; ============================================================
+; D UP
+; ============================================================
+
+$*d up::
+{
+    HandleKeyUp(2)
+}
+
+
+; ============================================================
+; Physical Key DOWN 처리
+; ============================================================
+
+HandleKeyDown(direction)
 {
     global physicalA
     global physicalD
     global activeDirection
-    global lastDownDirection
 
-    physicalA := GetKeyState("a", "P")
-    physicalD := GetKeyState("d", "P")
+    global lastDownSequence
+    global lastDownA
+    global lastDownD
 
-    if (physicalA)
-    {
-        lastDownDirection := "A"
-    }
-    else if (physicalD)
-    {
-        lastDownDirection := "D"
-    }
-    else
-    {
-        lastDownDirection := ""
-    }
-
-    if (physicalA && physicalD)
-    {
-        ; 시작 이전의 Down 순서를 알 수 없으므로
-        ; 결정적인 초기값으로 A를 사용한다.
-        activeDirection := "A"
-        SendKeyDown("A")
-    }
-    else if (physicalA)
-    {
-        activeDirection := "A"
-        SendKeyDown("A")
-    }
-    else if (physicalD)
-    {
-        activeDirection := "D"
-        SendKeyDown("D")
-    }
-}
-
-
-; ============================================================
-; Physical Key Down
-; ============================================================
-
-HandleKeyDown(key)
-{
-    global physicalA
-    global physicalD
-    global activeDirection
-    global lastDownDirection
-
-    ; 입력 처리 중 다른 스레드가 상태를 변경하지 않도록 한다.
-    Critical("On")
 
     ; --------------------------------------------------------
-    ; 이미 눌린 키의 중복 Down은 무시한다.
+    ; A
     ; --------------------------------------------------------
 
-    if (key = "A")
+    if (direction = 1)
     {
-        if (physicalA)
-        {
+        ; 이미 Physical Down이면 중복 Down 무시
+        if physicalA
             return
-        }
 
         physicalA := true
     }
+
+    ; --------------------------------------------------------
+    ; D
+    ; --------------------------------------------------------
+
     else
     {
-        ; 이 함수는 A/D만 호출하므로 D로 처리한다.
-        if (physicalD)
-        {
+        ; 이미 Physical Down이면 중복 Down 무시
+        if physicalD
             return
-        }
 
         physicalD := true
     }
 
-    ; --------------------------------------------------------
-    ; 새로운 Down이므로 LIP의 최신 입력으로 기록.
-    ; --------------------------------------------------------
-
-    lastDownDirection := key
-
-    ; 이미 해당 방향이 활성화되어 있다면 아무 것도 하지 않는다.
-    if (activeDirection = key)
-    {
-        return
-    }
 
     ; --------------------------------------------------------
-    ; 방향 전환
+    ; 마지막 Down 순서 기록
+    ; --------------------------------------------------------
+
+    lastDownSequence += 1
+
+    if (direction = 1)
+        lastDownA := lastDownSequence
+    else
+        lastDownD := lastDownSequence
+
+
+    ; --------------------------------------------------------
+    ; Last Input Priority
     ;
-    ; 반드시:
-    ;
-    ; 기존 방향 Up
-    ; 새 방향 Down
-    ;
-    ; 순서를 유지한다.
+    ; 방금 Down된 방향을 즉시 활성화한다.
     ; --------------------------------------------------------
 
-    if (activeDirection = "A")
-    {
-        SendKeyUp("A")
-    }
-    else if (activeDirection = "D")
-    {
-        SendKeyUp("D")
-    }
-
-    SendKeyDown(key)
-    activeDirection := key
+    if (activeDirection != direction)
+        ActivateDirection(direction)
 }
 
 
 ; ============================================================
-; Physical Key Up
+; Physical Key UP 처리
 ; ============================================================
 
-HandleKeyUp(key)
+HandleKeyUp(direction)
 {
     global physicalA
     global physicalD
     global activeDirection
 
-    Critical("On")
 
     ; --------------------------------------------------------
-    ; Physical 상태 변경
+    ; A UP
     ; --------------------------------------------------------
 
-    if (key = "A")
+    if (direction = 1)
     {
-        ; 이미 Up이면 중복 Up이므로 무시.
-        if (!physicalA)
-        {
+        ; 중복 Up 방지
+        if !physicalA
             return
-        }
 
         physicalA := false
     }
+
+    ; --------------------------------------------------------
+    ; D UP
+    ; --------------------------------------------------------
+
     else
     {
-        if (!physicalD)
-        {
+        ; 중복 Up 방지
+        if !physicalD
             return
-        }
 
         physicalD := false
     }
 
+
     ; --------------------------------------------------------
-    ; 현재 활성 방향이 아니라면 출력에 아무런 영향을 주지
-    ; 않는다.
+    ; 현재 활성 방향이 아니라면
+    ; Output에는 아무런 변화가 없다.
+    ;
+    ; 예:
+    ;
+    ; physicalA = true
+    ; physicalD = true
+    ; activeDirection = D
+    ;
+    ; A Up
+    ;
+    ; => D 출력 그대로 유지
     ; --------------------------------------------------------
 
-    if (activeDirection != key)
-    {
+    if (activeDirection != direction)
         return
-    }
+
 
     ; --------------------------------------------------------
     ; 현재 활성 방향 Release
     ; --------------------------------------------------------
 
-    SendKeyUp(key)
-    activeDirection := ""
+    DeactivateDirection(direction)
+
 
     ; --------------------------------------------------------
-    ; 반대 키가 여전히 Physical Down이면 즉시 복귀.
+    ; 반대 방향이 아직 Physical Down이면
+    ; 즉시 다시 활성화
     ; --------------------------------------------------------
 
-    if (key = "A")
+    if (direction = 1)
     {
-        if (physicalD)
-        {
-            SendKeyDown("D")
-            activeDirection := "D"
-        }
+        if physicalD
+            ActivateDirection(2)
     }
     else
     {
-        if (physicalA)
-        {
-            SendKeyDown("A")
-            activeDirection := "A"
-        }
+        if physicalA
+            ActivateDirection(1)
     }
 }
 
 
 ; ============================================================
-; 실제 A/D Down 출력
-; ============================================================
-
-SendKeyDown(key)
-{
-    if (key = "A")
-    {
-        SendEvent("{a down}")
-    }
-    else
-    {
-        SendEvent("{d down}")
-    }
-}
-
-
-; ============================================================
-; 실제 A/D Up 출력
-; ============================================================
-
-SendKeyUp(key)
-{
-    if (key = "A")
-    {
-        SendEvent("{a up}")
-    }
-    else
-    {
-        SendEvent("{d up}")
-    }
-}
-
-
-; ============================================================
-; 안전한 전체 Release
+; 방향 활성화
 ;
-; Reload / Exit 때 호출된다.
+; 전환 순서:
+;
+;   기존 방향 UP
+;   ↓
+;   새로운 방향 DOWN
+;
+; 절대로 두 방향을 동시에 Output Down 상태로 만들지 않는다.
 ; ============================================================
 
-ReleaseAllOutputs()
+ActivateDirection(direction)
+{
+    global activeDirection
+
+
+    ; 이미 같은 방향이면 아무것도 하지 않는다.
+    if (activeDirection = direction)
+        return
+
+
+    ; --------------------------------------------------------
+    ; 기존 방향 Release
+    ; --------------------------------------------------------
+
+    if (activeDirection != 0)
+        DeactivateDirection(activeDirection)
+
+
+    ; --------------------------------------------------------
+    ; 새로운 방향 Press
+    ; --------------------------------------------------------
+
+    if (direction = 1)
+        SendInput "{a down}"
+    else
+        SendInput "{d down}"
+
+
+    activeDirection := direction
+}
+
+
+; ============================================================
+; 방향 비활성화
+; ============================================================
+
+DeactivateDirection(direction)
+{
+    global activeDirection
+
+
+    ; 현재 활성 방향이 아니면 아무것도 하지 않는다.
+    if (activeDirection != direction)
+        return
+
+
+    if (direction = 1)
+        SendInput "{a up}"
+    else
+        SendInput "{d up}"
+
+
+    activeDirection := 0
+}
+
+
+; ============================================================
+; 시작 시 Physical A/D 상태 확인
+; ============================================================
+
+InitializePhysicalState()
 {
     global physicalA
     global physicalD
     global activeDirection
-    global lastDownDirection
 
-    Critical("On")
+    global lastDownSequence
+    global lastDownA
+    global lastDownD
 
-    ; 현재 활성 출력부터 해제한다.
-    if (activeDirection = "A")
+
+    ; --------------------------------------------------------
+    ; 실제 Physical keyboard 상태 확인
+    ; --------------------------------------------------------
+
+    physicalA := GetKeyState("a", "P")
+    physicalD := GetKeyState("d", "P")
+
+
+    ; 상태 초기화
+    activeDirection := 0
+
+    lastDownSequence := 0
+    lastDownA := 0
+    lastDownD := 0
+
+
+    ; --------------------------------------------------------
+    ; A만 눌린 경우
+    ; --------------------------------------------------------
+
+    if physicalA && !physicalD
     {
-        SendKeyUp("A")
+        lastDownSequence := 1
+        lastDownA := 1
+
+        ActivateDirection(1)
+        return
     }
-    else if (activeDirection = "D")
+
+
+    ; --------------------------------------------------------
+    ; D만 눌린 경우
+    ; --------------------------------------------------------
+
+    if physicalD && !physicalA
     {
-        SendKeyUp("D")
+        lastDownSequence := 1
+        lastDownD := 1
+
+        ActivateDirection(2)
+        return
     }
 
-    ; 내부 상태가 예상과 달라졌더라도 stuck 방지를 위해
-    ; A/D 양쪽에 Up을 한 번 더 보낸다.
-    SendKeyUp("A")
-    SendKeyUp("D")
 
+    ; --------------------------------------------------------
+    ; A와 D가 모두 눌린 경우
+    ;
+    ; 스크립트가 시작되기 전에 발생한 실제 Down 순서는
+    ; AHK가 알 수 없다.
+    ;
+    ; 따라서 A를 deterministic fallback으로 사용한다.
+    ; --------------------------------------------------------
+
+    if physicalA && physicalD
+    {
+        lastDownSequence := 1
+        lastDownA := 1
+
+        ActivateDirection(1)
+    }
+}
+
+
+; ============================================================
+; 모든 Output Release
+;
+; Script 종료 / Reload 시 stuck 방지
+; ============================================================
+
+ReleaseAllOutputs(*)
+{
+    global activeDirection
+    global physicalA
+    global physicalD
+
+
+    ; --------------------------------------------------------
+    ; 현재 활성 방향 Release
+    ; --------------------------------------------------------
+
+    if (activeDirection = 1)
+        SendInput "{a up}"
+    else if (activeDirection = 2)
+        SendInput "{d up}"
+
+
+    ; --------------------------------------------------------
+    ; 최종 방어 Release
+    ;
+    ; 혹시 내부 상태와 실제 Output 상태가 불일치했더라도
+    ; A/D를 모두 Up으로 만든다.
+    ; --------------------------------------------------------
+
+    SendInput "{a up}"
+    SendInput "{d up}"
+
+
+    ; --------------------------------------------------------
+    ; 내부 상태 초기화
+    ; --------------------------------------------------------
+
+    activeDirection := 0
     physicalA := false
     physicalD := false
-    activeDirection := ""
-    lastDownDirection := ""
 }
 
 
 ; ============================================================
-; Script 종료 / Reload
+; 초기화
 ; ============================================================
 
-OnExit(HandleExit)
+InitializePhysicalState()
 
 
-HandleExit(ExitReason, ExitCode)
-{
-    ReleaseAllOutputs()
-}
+; ============================================================
+; 종료 / Reload 안전 처리
+; ============================================================
 
+OnExit(ReleaseAllOutputs)
