@@ -1,482 +1,93 @@
-﻿#Requires AutoHotkey v2.0
-#SingleInstance Force
-#UseHook
-
-
-; ============================================================
-; A/D SOCD - Last Input Priority
-;
-; AutoHotkey v2
-;
-; Physical state:
-;   physicalA
-;   physicalD
-;
-; Output state:
-;   activeDirection
-;
-; Direction values:
-;   0 = None
-;   1 = A
-;   2 = D
-;
-; LIP:
-;   마지막으로 발생한 Down 이벤트의 키가 우선권을 가진다.
-;
-; ============================================================
-
-
-; ============================================================
-; 성능 최적화
-; ============================================================
-
-; Send는 Input 모드 사용
-; AHK v2의 기본값이지만 명시적으로 설정한다.
-SendMode "Input"
-
-; 키보드 Hook 강제 사용
-#UseHook
-
-; 키 입력 이력 비활성화
-KeyHistory 0
-
-; 실행 라인 기록 비활성화
-ListLines false
-
-; 짧은 시간 동안 발생하는 많은 Hotkey 입력에 대한
-; 경고 기준을 사실상 제거한다.
-A_HotkeyInterval := 99000000
-A_MaxHotkeysPerInterval := 99000000
-
-; 프로세스 우선순위를 High로 설정.
-; 게임 등 CPU 부하가 높은 상황에서 hotkey/send 지연을
-; 줄이는 데 도움이 될 수 있다.
-ProcessSetPriority "High"
-
-; 새로 실행되는 Thread가 즉시 interruptible하도록 한다.
-;
-; 게임 입력처럼 hotkey 응답성이 중요한 경우 유리하다.
-Thread "Interrupt", 0
-
-
-; ============================================================
-; 상태 변수
-; ============================================================
-
-; Physical keyboard state
-global physicalA := false
-global physicalD := false
-
-
-; ------------------------------------------------------------
-; 현재 실제로 게임에 출력하고 있는 방향
-;
-; 0 = 없음
-; 1 = A
-; 2 = D
-; ------------------------------------------------------------
-
-global activeDirection := 0
-
-
-; ------------------------------------------------------------
-; 마지막 Down 이벤트 순서
-;
-; 요구사항에 따라 마지막 입력 순서를 명시적으로 추적한다.
-; ------------------------------------------------------------
-
-global lastDownSequence := 0
-
-global lastDownA := 0
-global lastDownD := 0
-
-
-; ============================================================
-; A DOWN
-; ============================================================
-
-$*a::
-{
-    HandleKeyDown(1)
-}
-
-
-; ============================================================
-; A UP
-; ============================================================
-
-$*a up::
-{
-    HandleKeyUp(1)
-}
-
-
-; ============================================================
-; D DOWN
-; ============================================================
-
-$*d::
-{
-    HandleKeyDown(2)
-}
-
-
-; ============================================================
-; D UP
-; ============================================================
-
-$*d up::
-{
-    HandleKeyUp(2)
-}
-
-
-; ============================================================
-; Physical Key DOWN 처리
-; ============================================================
-
-HandleKeyDown(direction)
-{
-    global physicalA
-    global physicalD
-    global activeDirection
-
-    global lastDownSequence
-    global lastDownA
-    global lastDownD
-
-
-    ; --------------------------------------------------------
-    ; A
-    ; --------------------------------------------------------
-
-    if (direction = 1)
-    {
-        ; 이미 Physical Down이면 중복 Down 무시
-        if physicalA
-            return
-
-        physicalA := true
-    }
-
-    ; --------------------------------------------------------
-    ; D
-    ; --------------------------------------------------------
-
-    else
-    {
-        ; 이미 Physical Down이면 중복 Down 무시
-        if physicalD
-            return
-
-        physicalD := true
-    }
-
-
-    ; --------------------------------------------------------
-    ; 마지막 Down 순서 기록
-    ; --------------------------------------------------------
-
-    lastDownSequence += 1
-
-    if (direction = 1)
-        lastDownA := lastDownSequence
-    else
-        lastDownD := lastDownSequence
-
-
-    ; --------------------------------------------------------
-    ; Last Input Priority
-    ;
-    ; 방금 Down된 방향을 즉시 활성화한다.
-    ; --------------------------------------------------------
-
-    if (activeDirection != direction)
-        ActivateDirection(direction)
-}
-
-
-; ============================================================
-; Physical Key UP 처리
-; ============================================================
-
-HandleKeyUp(direction)
-{
-    global physicalA
-    global physicalD
-    global activeDirection
-
-
-    ; --------------------------------------------------------
-    ; A UP
-    ; --------------------------------------------------------
-
-    if (direction = 1)
-    {
-        ; 중복 Up 방지
-        if !physicalA
-            return
-
-        physicalA := false
-    }
-
-    ; --------------------------------------------------------
-    ; D UP
-    ; --------------------------------------------------------
-
-    else
-    {
-        ; 중복 Up 방지
-        if !physicalD
-            return
-
-        physicalD := false
-    }
-
-
-    ; --------------------------------------------------------
-    ; 현재 활성 방향이 아니라면
-    ; Output에는 아무런 변화가 없다.
-    ;
-    ; 예:
-    ;
-    ; physicalA = true
-    ; physicalD = true
-    ; activeDirection = D
-    ;
-    ; A Up
-    ;
-    ; => D 출력 그대로 유지
-    ; --------------------------------------------------------
-
-    if (activeDirection != direction)
+; === 성능 및 지연 시간 극한 최적화 ===
+#NoEnv                         ; 피해야 할 환경 변수 검사를 생략하여 실행 속도 향상
+#MaxHotkeysPerInterval 99000000 ; 단시간 내 과도한 키 입력 시 경고창이 뜨는 것을 방지
+#HotkeyInterval 99000000       ; 위 설정과 세트 (동시 입력 씹힘 방지)
+KeyHistory 0                   ; 키 입력 이력 기록을 중지하여 CPU 오버헤드 제거
+ListLines Off                  ; 실행된 라인 로그 기록을 중지하여 연산 속도 극한으로 상승
+Process, Priority, , H         ; 이 스크립트의 CPU 우선순위를 '높음(High)'으로 설정
+SetBatchLines, -1              ; 스크립트 줄 간의 의도적인 대기 시간(10ms)을 없애고 즉시 실행
+SetKeyDelay, -1, -1            ; 키 입력 사이의 지연 시간 제거 (가장 중요)
+SetMouseDelay, -1              ; 마우스 입력 지연 시간 제거
+SetDefaultMouseSpeed, 0        ; 마우스 이동 속도를 즉시 이동으로 설정
+SetWinDelay, -1                ; 창 제어 관련 지연 시간 제거
+SetControlDelay, -1            ; 컨트롤 제어 관련 지연 시간 제거
+SendMode Input
+#UseHook On                    ; 윈도우 훅을 강제로 사용하여 키 입력 감지 속도 일관성 유지
+Critical                       ; 스크립트 연산 중 다른 백그라운드 스레드가 끼어들지 못하게 차단
+Thread, Interrupt, 0           ; 스레드 중단 지연 방지
+
+; === Caps Lock 및 Shift/Ctrl/Alt 모디파이어 키 간섭 완벽 차단 ===
+#InstallKeybdHook
+SetStoreCapsLockMode, Off      ; Caps Lock 상태 자동 조작 차단 (Caps Lock 활성화 시 끊김 해결)
+#MenuMaskKey vkFF              ; AHK 내부의 불필요한 Ctrl/Alt 신호 주입 방지
+SetWorkingDir %A_ScriptDir%
+
+; --- 변수 초기화 ---
+a_down := false
+d_down := false
+last_key := ""
+current_output := ""
+
+; --- A 키 (가상 키 코드 vk41) ---
+*a::
+    if (a_down)
         return
+    a_down := true
+    last_key := "vk41"
+    UpdateSOCD()
+return
 
+*a up::
+    a_down := false
+    UpdateSOCD()
+return
 
-    ; --------------------------------------------------------
-    ; 현재 활성 방향 Release
-    ; --------------------------------------------------------
-
-    DeactivateDirection(direction)
-
-
-    ; --------------------------------------------------------
-    ; 반대 방향이 아직 Physical Down이면
-    ; 즉시 다시 활성화
-    ; --------------------------------------------------------
-
-    if (direction = 1)
-    {
-        if physicalD
-            ActivateDirection(2)
-    }
-    else
-    {
-        if physicalA
-            ActivateDirection(1)
-    }
-}
-
-
-; ============================================================
-; 방향 활성화
-;
-; 전환 순서:
-;
-;   기존 방향 UP
-;   ↓
-;   새로운 방향 DOWN
-;
-; 절대로 두 방향을 동시에 Output Down 상태로 만들지 않는다.
-; ============================================================
-
-ActivateDirection(direction)
-{
-    global activeDirection
-
-
-    ; 이미 같은 방향이면 아무것도 하지 않는다.
-    if (activeDirection = direction)
+; --- D 키 (가상 키 코드 vk44) ---
+*d::
+    if (d_down)
         return
+    d_down := true
+    last_key := "vk44"
+    UpdateSOCD()
+return
 
+*d up::
+    d_down := false
+    UpdateSOCD()
+return
 
-    ; --------------------------------------------------------
-    ; 기존 방향 Release
-    ; --------------------------------------------------------
-
-    if (activeDirection != 0)
-        DeactivateDirection(activeDirection)
-
-
-    ; --------------------------------------------------------
-    ; 새로운 방향 Press
-    ; --------------------------------------------------------
-
-    if (direction = 1)
-        SendInput "{a down}"
-    else
-        SendInput "{d down}"
-
-
-    activeDirection := direction
-}
-
-
-; ============================================================
-; 방향 비활성화
-; ============================================================
-
-DeactivateDirection(direction)
-{
-    global activeDirection
-
-
-    ; 현재 활성 방향이 아니면 아무것도 하지 않는다.
-    if (activeDirection != direction)
-        return
-
-
-    if (direction = 1)
-        SendInput "{a up}"
-    else
-        SendInput "{d up}"
-
-
-    activeDirection := 0
-}
-
-
-; ============================================================
-; 시작 시 Physical A/D 상태 확인
-; ============================================================
-
-InitializePhysicalState()
-{
-    global physicalA
-    global physicalD
-    global activeDirection
-
-    global lastDownSequence
-    global lastDownA
-    global lastDownD
-
-
-    ; --------------------------------------------------------
-    ; 실제 Physical keyboard 상태 확인
-    ; --------------------------------------------------------
-
-    physicalA := GetKeyState("a", "P")
-    physicalD := GetKeyState("d", "P")
-
-
-    ; 상태 초기화
-    activeDirection := 0
-
-    lastDownSequence := 0
-    lastDownA := 0
-    lastDownD := 0
-
-
-    ; --------------------------------------------------------
-    ; A만 눌린 경우
-    ; --------------------------------------------------------
-
-    if physicalA && !physicalD
-    {
-        lastDownSequence := 1
-        lastDownA := 1
-
-        ActivateDirection(1)
-        return
+; --- SOCD 상태 업데이트 함수 ---
+UpdateSOCD() {
+    global a_down, d_down, last_key, current_output
+    
+    target := ""
+    
+    if (a_down && d_down) {
+        target := last_key
+    } 
+    else if (a_down) {
+        target := "vk41"
+    } else if (d_down) {
+        target := "vk44"
     }
-
-
-    ; --------------------------------------------------------
-    ; D만 눌린 경우
-    ; --------------------------------------------------------
-
-    if physicalD && !physicalA
-    {
-        lastDownSequence := 1
-        lastDownD := 1
-
-        ActivateDirection(2)
+    
+    if (target == current_output)
         return
+        
+    ; {Blind} + VK 코드로 모디파이어 키/Caps Lock을 유지하면서 딜레이 없이 Pure Signal 송신
+    if (current_output != "") {
+        SendInput, {Blind}{%current_output% up}
     }
-
-
-    ; --------------------------------------------------------
-    ; A와 D가 모두 눌린 경우
-    ;
-    ; 스크립트가 시작되기 전에 발생한 실제 Down 순서는
-    ; AHK가 알 수 없다.
-    ;
-    ; 따라서 A를 deterministic fallback으로 사용한다.
-    ; --------------------------------------------------------
-
-    if physicalA && physicalD
-    {
-        lastDownSequence := 1
-        lastDownA := 1
-
-        ActivateDirection(1)
+    
+    if (target != "") {
+        SendInput, {Blind}{%target% down}
     }
+    
+    current_output := target
 }
 
-
-; ============================================================
-; 모든 Output Release
-;
-; Script 종료 / Reload 시 stuck 방지
-; ============================================================
-
-ReleaseAllOutputs(*)
-{
-    global activeDirection
-    global physicalA
-    global physicalD
-
-
-    ; --------------------------------------------------------
-    ; 현재 활성 방향 Release
-    ; --------------------------------------------------------
-
-    if (activeDirection = 1)
-        SendInput "{a up}"
-    else if (activeDirection = 2)
-        SendInput "{d up}"
-
-
-    ; --------------------------------------------------------
-    ; 최종 방어 Release
-    ;
-    ; 혹시 내부 상태와 실제 Output 상태가 불일치했더라도
-    ; A/D를 모두 Up으로 만든다.
-    ; --------------------------------------------------------
-
-    SendInput "{a up}"
-    SendInput "{d up}"
-
-
-    ; --------------------------------------------------------
-    ; 내부 상태 초기화
-    ; --------------------------------------------------------
-
-    activeDirection := 0
-    physicalA := false
-    physicalD := false
-}
-
-
-; ============================================================
-; 초기화
-; ============================================================
-
-InitializePhysicalState()
-
-
-; ============================================================
-; 종료 / Reload 안전 처리
-; ============================================================
-
-OnExit(ReleaseAllOutputs)
+; --- 온/오프 토글 (F12) ---
+F12::
+    Suspend
+    SoundBeep, 750, 100
+return
